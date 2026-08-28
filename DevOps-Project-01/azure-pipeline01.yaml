@@ -1,1 +1,61 @@
-Hii
+trigger:
+- master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  projectPath: 'DevOps-Project-01/Java-Login-App'
+  artifactName: 'java-login-app'
+
+stages:
+
+# =========================
+# STAGE 1 - BUILD
+# =========================
+- stage: Build
+  displayName: Build Java Application
+
+  jobs:
+  - job: MavenBuild
+    displayName: Maven Clean Package
+
+    steps:
+
+    - checkout: self
+
+    - task: JavaToolInstaller@0
+      displayName: Install Java 11
+      inputs:
+        versionSpec: '11'
+        jdkArchitectureOption: 'x64'
+        jdkSourceOption: 'PreInstalled'
+
+    - script: |
+        java -version
+        mvn -version
+      displayName: Check Java and Maven
+
+    - script: |
+        cd $(projectPath)
+        mvn clean package
+      displayName: Maven Clean Package
+
+    - script: |
+        echo "Generated files:"
+        ls -lh $(projectPath)/target
+      displayName: Check WAR File
+
+    - task: CopyFiles@2
+      displayName: Copy WAR Artifact
+      inputs:
+        SourceFolder: '$(projectPath)/target'
+        Contents: '*.war'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+    - task: PublishBuildArtifacts@1
+      displayName: Publish WAR Artifact
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: '$(artifactName)'
+        publishLocation: 'Container'
