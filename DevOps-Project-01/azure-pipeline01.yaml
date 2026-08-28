@@ -1,61 +1,164 @@
 trigger:
-- master
+  branches:
+    include:
+      - master
+
+pr: none
+
+
+# ============================================================
+# SELF-HOSTED WINDOWS AGENT
+# ============================================================
 
 pool:
   name: 'Pv-agent'
 
+
+# ============================================================
+# VARIABLES
+# ============================================================
+
 variables:
-  projectPath: 'DevOps-Project-01/Java-Login-App'
+
+  # Java
+  javaVersion: '11'
+
+  # Application
+  appDirectory: 'DevOps-Project-01\Java-Login-App'
+
+  # Azure Storage
+  storageAccount: 'vishalsa007'
+  containerName: 'vishalcontainer'
+
+  # Artifact
   artifactName: 'java-login-app'
+
+  # Azure service connection
+  azureServiceConnection: 'batch13-connection'
+
+
+# ============================================================
+# STAGES
+# ============================================================
 
 stages:
 
-# =========================
+# ============================================================
 # STAGE 1 - BUILD
-# =========================
+# ============================================================
+
 - stage: Build
-  displayName: Build Java Application
+  displayName: 'Build Java Login Application'
 
   jobs:
+
   - job: MavenBuild
-    displayName: Maven Clean Package
+    displayName: 'Maven Build'
 
     steps:
 
+    # --------------------------------------------------------
+    # CHECKOUT
+    # --------------------------------------------------------
+
     - checkout: self
+      displayName: 'Checkout source code'
 
-    - task: JavaToolInstaller@0
-      displayName: Install Java 11
-      inputs:
-        versionSpec: '11'
-        jdkArchitectureOption: 'x64'
-        jdkSourceOption: 'PreInstalled'
 
-    - script: |
+    # --------------------------------------------------------
+    # VERIFY JAVA
+    # --------------------------------------------------------
+
+    - powershell: |
+
+        Write-Host "========================================"
+        Write-Host "JAVA VERSION"
+        Write-Host "========================================"
+
         java -version
-        mvn -version
-      displayName: Check Java and Maven
 
-    - script: |
-        cd $(projectPath)
-        mvn clean package
-      displayName: Maven Clean Package
+        Write-Host ""
+        Write-Host "========================================"
+        Write-Host "MAVEN VERSION"
+        Write-Host "========================================"
 
-    - script: |
-        echo "Generated files:"
-        ls -lh $(projectPath)/target
-      displayName: Check WAR File
+        Set-Location "$(appDirectory)"
 
-    - task: CopyFiles@2
-      displayName: Copy WAR Artifact
-      inputs:
-        SourceFolder: '$(projectPath)/target'
-        Contents: '*.war'
-        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+        .\mvnw.cmd --version
 
-    - task: PublishBuildArtifacts@1
-      displayName: Publish WAR Artifact
-      inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: '$(artifactName)'
-        publishLocation: 'Container'
+      displayName: 'Verify Java and Maven'
+
+
+    # --------------------------------------------------------
+    # MAVEN BUILD
+    # --------------------------------------------------------
+
+    - powershell: |
+
+        Write-Host "========================================"
+        Write-Host "BUILDING APPLICATION"
+        Write-Host "========================================"
+
+        Set-Location "$(appDirectory)"
+
+        .\mvnw.cmd clean package -DskipTests
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Maven build failed."
+            exit 1
+        }
+
+      displayName: 'Maven clean package'
+
+
+    # --------------------------------------------------------
+    # VERIFY BUILD
+    # --------------------------------------------------------
+
+    - powershell: |
+
+        Write-Host "========================================"
+        Write-Host "BUILD OUTPUT"
+        Write-Host "========================================"
+
+        Set-Location "$(appDirectory)"
+
+        Write-Host ""
+        Write-Host "Target directory:"
+        Get-ChildItem .\target
+
+        Write-Host ""
+        Write-Host "Generated JAR/WAR files:"
+
+        Get-ChildItem .\target -Include *.jar,*.war -File
+
+      displayName: 'Verify generated artifact'
+
+
+    # --------------------------------------------------------
+    # PREPARE ARTIFACT
+    # --------------------------------------------------------
+
+    - powershell: |
+
+        Write-Host "========================================"
+        Write-Host "PREPARING ARTIFACT"
+        Write-Host "========================================"
+
+        $artifactDirectory = "$(Build.ArtifactStagingDirectory)\$(artifactName)"
+
+        New-Item `
+          -ItemType Directory `
+          -Force `
+          -Path $artifactDirectory | Out-Null
+
+        Set-Location "$(appDirectory)"
+
+        $files = Get-ChildItem .\target -Include *.jar,*.war -File
+
+        if ($files.Count -eq 0) {
+            Write-Error "No JAR or WAR file was generated."
+            exit 1
+        }
+
+        foreach ($file in $files) {
