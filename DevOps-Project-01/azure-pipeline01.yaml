@@ -5,17 +5,26 @@ trigger:
 
 pr: none
 
+
 # ============================================================
-# SELF-HOSTED MAC AGENT
+# SELF-HOSTED WINDOWS AGENT
 # ============================================================
 
 pool:
   name: 'Pv-agent'
 
+
+# ============================================================
+# VARIABLES
+# ============================================================
+
 variables:
 
+  # Java
+  javaVersion: '21'
+
   # Application
-  appDirectory: 'DevOps-Project-01/Java-Login-App'
+  appDirectory: 'DevOps-Project-01\Java-Login-App'
 
   # Azure Storage
   storageAccount: 'pvstrg199'
@@ -27,7 +36,13 @@ variables:
   # Azure service connection
   azureServiceConnection: 'b13'
 
+
+# ============================================================
+# STAGES
+# ============================================================
+
 stages:
+
 
 # ============================================================
 # STAGE 1 - BUILD
@@ -55,45 +70,41 @@ stages:
     # VERIFY AGENT
     # --------------------------------------------------------
 
-    - bash: |
-        echo "========================================"
-        echo "AGENT INFORMATION"
-        echo "========================================"
+    - powershell: |
 
-        echo "Agent Name    : $AGENT_NAME"
-        echo "Agent OS      : $AGENT_OS"
-        echo "Agent Version : $AGENT_VERSION"
+        Write-Host "========================================"
+        Write-Host "AGENT INFORMATION"
+        Write-Host "========================================"
 
-        echo ""
-        echo "User:"
-        whoami
+        Write-Host "Agent Name    : $env:AGENT_NAME"
+        Write-Host "Agent OS      : $env:AGENT_OS"
+        Write-Host "Agent Version : $env:AGENT_VERSION"
+        Write-Host "Computer      : $env:COMPUTERNAME"
+        Write-Host "User          : $env:USERNAME"
 
-        echo ""
-        echo "Machine:"
-        hostname
-
-      displayName: 'Verify Mac Agent'
+      displayName: 'Verify Windows Agent'
 
 
     # --------------------------------------------------------
     # VERIFY JAVA
     # --------------------------------------------------------
 
-    - bash: |
-        echo "========================================"
-        echo "JAVA VERSION"
-        echo "========================================"
+    - powershell: |
+
+        Write-Host "========================================"
+        Write-Host "JAVA VERSION"
+        Write-Host "========================================"
 
         java -version
 
-        if [ $? -ne 0 ]; then
-          echo "Java is not available."
-          exit 1
-        fi
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Java is not available."
+            exit 1
+        }
 
-        echo ""
-        echo "JAVA_HOME:"
-        echo "$JAVA_HOME"
+        Write-Host ""
+        Write-Host "JAVA_HOME:"
+        Write-Host $env:JAVA_HOME
 
       displayName: 'Verify Java'
 
@@ -102,21 +113,22 @@ stages:
     # VERIFY MAVEN
     # --------------------------------------------------------
 
-    - bash: |
-        echo "========================================"
-        echo "MAVEN VERSION"
-        echo "========================================"
+    - powershell: |
 
-        which mvn
+        Write-Host "========================================"
+        Write-Host "MAVEN VERSION"
+        Write-Host "========================================"
 
-        echo ""
+        where.exe mvn
+
+        Write-Host ""
 
         mvn -version
 
-        if [ $? -ne 0 ]; then
-          echo "Maven is not available to the Azure DevOps agent."
-          exit 1
-        fi
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Maven is not available to the Azure DevOps agent."
+            exit 1
+        }
 
       displayName: 'Verify Maven'
 
@@ -125,7 +137,7 @@ stages:
     # VERIFY APPLICATION DIRECTORY
     # --------------------------------------------------------
 
-    - bash: |
+        - bash: |
         echo "========================================"
         echo "VERIFY APPLICATION"
         echo "========================================"
@@ -136,62 +148,30 @@ stages:
         echo "$APP_PATH"
 
         if [ ! -d "$APP_PATH" ]; then
-
           echo "ERROR: Application directory does not exist."
 
           echo ""
           echo "Repository contents:"
-
-          find "$(Build.SourcesDirectory)" \
-            -maxdepth 3 \
-            -type d \
-            -print
+          find "$(Build.SourcesDirectory)" -type d
 
           exit 1
-
         fi
 
         echo ""
-        echo "Application directory found."
+        echo "Application directory exists."
 
+        echo ""
+        echo "Application contents:"
         ls -la "$APP_PATH"
 
         echo ""
-        echo "Checking pom.xml..."
+        echo "Checking pom.xml:"
 
         if [ ! -f "$APP_PATH/pom.xml" ]; then
           echo "ERROR: pom.xml not found."
           exit 1
         fi
 
-        ls -l "$APP_PATH/pom.xml"
+        echo "pom.xml found successfully."
 
-      displayName: 'Verify Application Directory'
-
-
-    # --------------------------------------------------------
-    # MAVEN BUILD
-    # --------------------------------------------------------
-
-    - bash: |
-        echo "========================================"
-        echo "MAVEN BUILD"
-        echo "========================================"
-
-        cd "$(Build.SourcesDirectory)/$(appDirectory)"
-
-        pwd
-
-        echo ""
-        echo "Running Maven build..."
-
-        mvn clean package -DskipTests -e
-
-        MAVEN_EXIT=$?
-
-        echo ""
-        echo "Maven exit code: $MAVEN_EXIT"
-
-        exit $MAVEN_EXIT
-
-      displayName: 'Maven clean package'
+      displayName: 'Verify Application'
