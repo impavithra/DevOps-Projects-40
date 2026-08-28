@@ -5,14 +5,26 @@ trigger:
 
 pr: none
 
+# ============================================================
+# SELF-HOSTED MAC AGENT
+# ============================================================
+
 pool:
   name: 'Pv-agent'
 
 variables:
+
+  # Application
   appDirectory: 'DevOps-Project-01/Java-Login-App'
+
+  # Azure Storage
   storageAccount: 'pvstrg199'
   containerName: 'pv-container'
+
+  # Artifact
   artifactName: 'java-login-app'
+
+  # Azure service connection
   azureServiceConnection: 'b13'
 
 stages:
@@ -25,45 +37,136 @@ stages:
   displayName: 'Build Java Login Application'
 
   jobs:
+
   - job: MavenBuild
     displayName: 'Maven Build'
 
     steps:
 
+    # --------------------------------------------------------
+    # CHECKOUT
+    # --------------------------------------------------------
+
     - checkout: self
       displayName: 'Checkout source code'
 
+
     # --------------------------------------------------------
-    # VERIFY JAVA, MAVEN AND PROJECT PATH
+    # VERIFY AGENT
+    # --------------------------------------------------------
+
+    - bash: |
+        echo "========================================"
+        echo "AGENT INFORMATION"
+        echo "========================================"
+
+        echo "Agent Name    : $AGENT_NAME"
+        echo "Agent OS      : $AGENT_OS"
+        echo "Agent Version : $AGENT_VERSION"
+
+        echo ""
+        echo "User:"
+        whoami
+
+        echo ""
+        echo "Machine:"
+        hostname
+
+      displayName: 'Verify Mac Agent'
+
+
+    # --------------------------------------------------------
+    # VERIFY JAVA
     # --------------------------------------------------------
 
     - bash: |
         echo "========================================"
         echo "JAVA VERSION"
         echo "========================================"
+
         java -version
 
+        if [ $? -ne 0 ]; then
+          echo "Java is not available."
+          exit 1
+        fi
+
         echo ""
+        echo "JAVA_HOME:"
+        echo "$JAVA_HOME"
+
+      displayName: 'Verify Java'
+
+
+    # --------------------------------------------------------
+    # VERIFY MAVEN
+    # --------------------------------------------------------
+
+    - bash: |
         echo "========================================"
         echo "MAVEN VERSION"
         echo "========================================"
+
+        which mvn
+
+        echo ""
+
         mvn -version
 
-        echo ""
+        if [ $? -ne 0 ]; then
+          echo "Maven is not available to the Azure DevOps agent."
+          exit 1
+        fi
+
+      displayName: 'Verify Maven'
+
+
+    # --------------------------------------------------------
+    # VERIFY APPLICATION DIRECTORY
+    # --------------------------------------------------------
+
+    - bash: |
         echo "========================================"
-        echo "PROJECT DIRECTORY"
+        echo "VERIFY APPLICATION"
         echo "========================================"
 
-        echo "$(Build.SourcesDirectory)/$(appDirectory)"
+        APP_PATH="$(Build.SourcesDirectory)/$(appDirectory)"
 
-        ls -la "$(Build.SourcesDirectory)/$(appDirectory)"
+        echo "Application path:"
+        echo "$APP_PATH"
+
+        if [ ! -d "$APP_PATH" ]; then
+
+          echo "ERROR: Application directory does not exist."
+
+          echo ""
+          echo "Repository contents:"
+
+          find "$(Build.SourcesDirectory)" \
+            -maxdepth 3 \
+            -type d \
+            -print
+
+          exit 1
+
+        fi
 
         echo ""
-        echo "Checking pom.xml"
+        echo "Application directory found."
 
-        ls -l "$(Build.SourcesDirectory)/$(appDirectory)/pom.xml"
+        ls -la "$APP_PATH"
 
-      displayName: 'Verify Java Maven and project'
+        echo ""
+        echo "Checking pom.xml..."
+
+        if [ ! -f "$APP_PATH/pom.xml" ]; then
+          echo "ERROR: pom.xml not found."
+          exit 1
+        fi
+
+        ls -l "$APP_PATH/pom.xml"
+
+      displayName: 'Verify Application Directory'
 
 
     # --------------------------------------------------------
@@ -72,219 +175,23 @@ stages:
 
     - bash: |
         echo "========================================"
-        echo "BUILDING APPLICATION"
+        echo "MAVEN BUILD"
         echo "========================================"
 
         cd "$(Build.SourcesDirectory)/$(appDirectory)"
 
-        echo "Current directory:"
         pwd
 
         echo ""
-        echo "Project files:"
-        ls -la
-
-        echo ""
-        echo "Starting Maven build..."
+        echo "Running Maven build..."
 
         mvn clean package -DskipTests -e
 
         MAVEN_EXIT=$?
 
         echo ""
-        echo "========================================"
-        echo "MAVEN EXIT CODE: $MAVEN_EXIT"
-        echo "========================================"
+        echo "Maven exit code: $MAVEN_EXIT"
 
         exit $MAVEN_EXIT
 
       displayName: 'Maven clean package'
-
-
-    # --------------------------------------------------------
-    # VERIFY BUILD OUTPUT
-    # --------------------------------------------------------
-
-    - bash: |
-        echo "========================================"
-        echo "VERIFY BUILD OUTPUT"
-        echo "========================================"
-
-        cd "$(Build.SourcesDirectory)/$(appDirectory)"
-
-        if [ ! -d "target" ]; then
-          echo "ERROR: target directory was not created."
-          exit 1
-        fi
-
-        echo ""
-        echo "Target directory contents:"
-
-        ls -lah target
-
-        echo ""
-        echo "Generated JAR/WAR files:"
-
-        find target -maxdepth 1 \
-          \( -name "*.jar" -o -name "*.war" \) \
-          -type f \
-          -print
-
-      displayName: 'Verify generated artifact'
-
-
-    # --------------------------------------------------------
-    # PREPARE ARTIFACT
-    # --------------------------------------------------------
-
-    - bash: |
-        set -e
-
-        echo "========================================"
-        echo "PREPARING ARTIFACT"
-        echo "========================================"
-
-        ARTIFACT_DIR="$(Build.ArtifactStagingDirectory)/$(artifactName)"
-
-        mkdir -p "$ARTIFACT_DIR"
-
-        cd "$(Build.SourcesDirectory)/$(appDirectory)"
-
-        FILE_COUNT=$(find target -maxdepth 1 \
-          \( -name "*.jar" -o -name "*.war" \) \
-          -type f | wc -l | tr -d ' ')
-
-        echo "Artifact count: $FILE_COUNT"
-
-        if [ "$FILE_COUNT" -eq 0 ]; then
-          echo "ERROR: No JAR or WAR file generated."
-          exit 1
-        fi
-
-        find target -maxdepth 1 \
-          \( -name "*.jar" -o -name "*.war" \) \
-          -type f \
-          -exec cp {} "$ARTIFACT_DIR/" \;
-
-        echo ""
-        echo "Copied artifacts:"
-
-        ls -lah "$ARTIFACT_DIR"
-
-      displayName: 'Prepare artifact'
-
-
-    # --------------------------------------------------------
-    # PUBLISH PIPELINE ARTIFACT
-    # --------------------------------------------------------
-
-    - task: PublishPipelineArtifact@1
-      displayName: 'Publish pipeline artifact'
-      inputs:
-        targetPath: '$(Build.ArtifactStagingDirectory)/$(artifactName)'
-        artifact: '$(artifactName)'
-
-
-# ============================================================
-# STAGE 2 - UPLOAD TO AZURE STORAGE
-# ============================================================
-
-- stage: Upload
-  displayName: 'Upload Artifact to Azure Storage'
-
-  dependsOn: Build
-  condition: succeeded()
-
-  jobs:
-  - job: UploadArtifact
-    displayName: 'Upload to Azure Blob Storage'
-
-    steps:
-
-    # --------------------------------------------------------
-    # DOWNLOAD ARTIFACT
-    # --------------------------------------------------------
-
-    - task: DownloadPipelineArtifact@2
-      displayName: 'Download pipeline artifact'
-      inputs:
-        artifact: '$(artifactName)'
-        path: '$(Pipeline.Workspace)/$(artifactName)'
-
-
-    # --------------------------------------------------------
-    # VERIFY DOWNLOADED FILE
-    # --------------------------------------------------------
-
-    - bash: |
-        echo "========================================"
-        echo "DOWNLOADED ARTIFACT"
-        echo "========================================"
-
-        ls -lah "$(Pipeline.Workspace)/$(artifactName)"
-
-      displayName: 'Verify downloaded artifact'
-
-
-    # --------------------------------------------------------
-    # UPLOAD TO AZURE STORAGE
-    # --------------------------------------------------------
-
-    - task: AzureCLI@2
-      displayName: 'Upload artifact to Azure Blob Storage'
-      inputs:
-        azureSubscription: '$(azureServiceConnection)'
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          set -e
-
-          echo "========================================"
-          echo "AZURE LOGIN"
-          echo "========================================"
-
-          az account show --output table
-
-          echo ""
-          echo "Storage account: $(storageAccount)"
-          echo "Container: $(containerName)"
-
-          echo ""
-          echo "Files to upload:"
-
-          ls -lah "$(Pipeline.Workspace)/$(artifactName)"
-
-          echo ""
-          echo "Uploading..."
-
-          az storage blob upload-batch \
-            --account-name "$(storageAccount)" \
-            --destination "$(containerName)" \
-            --source "$(Pipeline.Workspace)/$(artifactName)" \
-            --auth-mode login \
-            --overwrite true
-
-          echo ""
-          echo "UPLOAD COMPLETED"
-
-
-    # --------------------------------------------------------
-    # VERIFY AZURE BLOB
-    # --------------------------------------------------------
-
-    - task: AzureCLI@2
-      displayName: 'Verify blob upload'
-      inputs:
-        azureSubscription: '$(azureServiceConnection)'
-        scriptType: 'bash'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          echo "========================================"
-          echo "FILES IN AZURE CONTAINER"
-          echo "========================================"
-
-          az storage blob list \
-            --account-name "$(storageAccount)" \
-            --container-name "$(containerName)" \
-            --auth-mode login \
-            --output table
