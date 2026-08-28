@@ -19,9 +19,6 @@ pool:
 
 variables:
 
-  # Java
-  javaVersion: '21'
-
   # Application
   appDirectory: 'DevOps-Project-01/Java-Login-App'
 
@@ -32,7 +29,7 @@ variables:
   # Artifact
   artifactName: 'java-login-app'
 
-  # Azure service connection
+  # Azure Service Connection
   azureServiceConnection: 'b13'
 
 
@@ -61,7 +58,7 @@ stages:
     # --------------------------------------------------------
 
     - checkout: self
-      displayName: 'Checkout source code'
+      displayName: 'Checkout Source Code'
 
 
     # --------------------------------------------------------
@@ -87,16 +84,13 @@ stages:
     # --------------------------------------------------------
 
     - bash: |
+        set -e
+
         echo "========================================"
         echo "JAVA VERSION"
         echo "========================================"
 
         java -version
-
-        if [ $? -ne 0 ]; then
-          echo "Java is not available."
-          exit 1
-        fi
 
         echo ""
         echo "JAVA_HOME:"
@@ -110,6 +104,8 @@ stages:
     # --------------------------------------------------------
 
     - bash: |
+        set -e
+
         echo "========================================"
         echo "MAVEN VERSION"
         echo "========================================"
@@ -120,19 +116,16 @@ stages:
 
         mvn -version
 
-        if [ $? -ne 0 ]; then
-          echo "Maven is not available to the Azure DevOps agent."
-          exit 1
-        fi
-
       displayName: 'Verify Maven'
 
 
     # --------------------------------------------------------
-    # VERIFY APPLICATION DIRECTORY
+    # VERIFY APPLICATION
     # --------------------------------------------------------
 
     - bash: |
+        set -e
+
         echo "========================================"
         echo "VERIFY APPLICATION"
         echo "========================================"
@@ -143,24 +136,27 @@ stages:
         echo "$APP_PATH"
 
         if [ ! -d "$APP_PATH" ]; then
+
           echo "ERROR: Application directory does not exist."
 
           echo ""
-          echo "Repository contents:"
-          find "$(Build.SourcesDirectory)" -maxdepth 3 -type d
+          echo "Repository directories:"
+
+          find "$(Build.SourcesDirectory)" \
+            -maxdepth 3 \
+            -type d
 
           exit 1
+
         fi
 
         echo ""
         echo "Application directory exists."
 
-        echo ""
-        echo "Application contents:"
         ls -la "$APP_PATH"
 
         echo ""
-        echo "Checking pom.xml:"
+        echo "Checking pom.xml..."
 
         if [ ! -f "$APP_PATH/pom.xml" ]; then
           echo "ERROR: pom.xml not found."
@@ -177,6 +173,8 @@ stages:
     # --------------------------------------------------------
 
     - bash: |
+        set -e
+
         echo "========================================"
         echo "MAVEN BUILD"
         echo "========================================"
@@ -189,13 +187,190 @@ stages:
         echo ""
         echo "Running Maven build..."
 
-        mvn clean package -DskipTests -e
-
-        MAVEN_EXIT=$?
+        mvn clean package -DskipTests
 
         echo ""
-        echo "Maven exit code: $MAVEN_EXIT"
+        echo "Maven build completed successfully."
 
-        exit $MAVEN_EXIT
+      displayName: 'Maven Clean Package'
 
-      displayName: 'Maven clean package'
+
+    # --------------------------------------------------------
+    # VERIFY BUILD OUTPUT
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "========================================"
+        echo "VERIFY BUILD OUTPUT"
+        echo "========================================"
+
+        cd "$(Build.SourcesDirectory)/$(appDirectory)"
+
+        if [ ! -d "target" ]; then
+          echo "ERROR: target directory not found."
+          exit 1
+        fi
+
+        echo "Target directory:"
+        ls -lah target
+
+        echo ""
+        echo "Generated JAR/WAR files:"
+
+        find target \
+          -maxdepth 1 \
+          \( -name "*.jar" -o -name "*.war" \) \
+          -type f \
+          -print
+
+      displayName: 'Verify Build Output'
+
+
+    # --------------------------------------------------------
+    # PREPARE ARTIFACT
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "========================================"
+        echo "PREPARE ARTIFACT"
+        echo "========================================"
+
+        ARTIFACT_DIR="$(Build.ArtifactStagingDirectory)/$(artifactName)"
+
+        mkdir -p "$ARTIFACT_DIR"
+
+        cd "$(Build.SourcesDirectory)/$(appDirectory)"
+
+        FILE_COUNT=$(find target \
+          -maxdepth 1 \
+          \( -name "*.jar" -o -name "*.war" \) \
+          -type f | wc -l | tr -d ' ')
+
+        echo "Artifacts found: $FILE_COUNT"
+
+        if [ "$FILE_COUNT" -eq 0 ]; then
+          echo "ERROR: No JAR/WAR artifact was generated."
+          exit 1
+        fi
+
+        find target \
+          -maxdepth 1 \
+          \( -name "*.jar" -o -name "*.war" \) \
+          -type f \
+          -exec cp {} "$ARTIFACT_DIR/" \;
+
+        echo ""
+        echo "Artifacts prepared:"
+
+        ls -lah "$ARTIFACT_DIR"
+
+      displayName: 'Prepare Artifact'
+
+
+    # --------------------------------------------------------
+    # PUBLISH PIPELINE ARTIFACT
+    # --------------------------------------------------------
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Pipeline Artifact'
+
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)/$(artifactName)'
+        artifact: '$(artifactName)'
+
+
+    # --------------------------------------------------------
+    # VERIFY AZURE CLI
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "========================================"
+        echo "AZURE CLI VERSION"
+        echo "========================================"
+
+        az --version
+
+      displayName: 'Verify Azure CLI'
+
+
+    # --------------------------------------------------------
+    # UPLOAD TO AZURE STORAGE
+    # --------------------------------------------------------
+
+    - task: AzureCLI@2
+      displayName: 'Upload Artifact to Azure Storage'
+
+      inputs:
+
+        azureSubscription: '$(azureServiceConnection)'
+
+        scriptType: 'bash'
+
+        scriptLocation: 'inlineScript'
+
+        inlineScript: |
+          set -e
+
+          echo "========================================"
+          echo "UPLOAD TO AZURE STORAGE"
+          echo "========================================"
+
+          echo "Storage Account : $(storageAccount)"
+          echo "Container       : $(containerName)"
+
+          echo ""
+          echo "Files to upload:"
+
+          ls -lah "$(Build.ArtifactStagingDirectory)/$(artifactName)"
+
+          echo ""
+          echo "Uploading artifact..."
+
+          az storage blob upload-batch \
+            --account-name "$(storageAccount)" \
+            --destination "$(containerName)" \
+            --source "$(Build.ArtifactStagingDirectory)/$(artifactName)" \
+            --auth-mode login \
+            --overwrite true
+
+          echo ""
+          echo "Artifact uploaded successfully."
+
+
+    # --------------------------------------------------------
+    # VERIFY AZURE STORAGE
+    # --------------------------------------------------------
+
+    - task: AzureCLI@2
+      displayName: 'Verify Artifact in Azure Storage'
+
+      inputs:
+
+        azureSubscription: '$(azureServiceConnection)'
+
+        scriptType: 'bash'
+
+        scriptLocation: 'inlineScript'
+
+        inlineScript: |
+          set -e
+
+          echo "========================================"
+          echo "FILES IN AZURE STORAGE"
+          echo "========================================"
+
+          az storage blob list \
+            --account-name "$(storageAccount)" \
+            --container-name "$(containerName)" \
+            --auth-mode login \
+            --query "[].{Name:name,Size:properties.contentLength}" \
+            --output table
+
+          echo ""
+          echo "Storage verification completed."
