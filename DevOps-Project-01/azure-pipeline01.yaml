@@ -5,9 +5,8 @@ trigger:
 
 pr: none
 
-
 # ============================================================
-# SELF-HOSTED WINDOWS AGENT
+# SELF-HOSTED MAC AGENT
 # ============================================================
 
 pool:
@@ -20,28 +19,23 @@ pool:
 
 variables:
 
-  # Java
-  javaVersion: '11'
-
   # Application
-  appDirectory: 'DevOps-Project-01\Java-Login-App'
+  appDirectory: 'DevOps-Project-01/Java-Login-App'
 
   # Azure Storage
-  storageAccount: 'vishalsa007'
-  containerName: 'vishalcontainer'
+  storageAccount: 'pvstrg199'
+  containerName: 'pv-container'
 
   # Artifact
   artifactName: 'java-login-app'
 
   # Azure service connection
-  azureServiceConnection: 'batch13-connection'
+  azureServiceConnection: 'b13'
 
 
 # ============================================================
 # STAGES
 # ============================================================
-
-stages:
 
 # ============================================================
 # STAGE 1 - BUILD
@@ -66,25 +60,30 @@ stages:
 
 
     # --------------------------------------------------------
-    # VERIFY JAVA
+    # VERIFY JAVA AND MAVEN
     # --------------------------------------------------------
 
-    - powershell: |
+    - bash: |
 
-        Write-Host "========================================"
-        Write-Host "JAVA VERSION"
-        Write-Host "========================================"
+        echo "========================================"
+        echo "JAVA VERSION"
+        echo "========================================"
 
         java -version
 
-        Write-Host ""
-        Write-Host "========================================"
-        Write-Host "MAVEN VERSION"
-        Write-Host "========================================"
+        echo ""
+        echo "========================================"
+        echo "MAVEN VERSION"
+        echo "========================================"
 
-        Set-Location "$(appDirectory)"
+        mvn -version
 
-        .\mvnw.cmd --version
+        echo ""
+        echo "========================================"
+        echo "PROJECT DIRECTORY"
+        echo "========================================"
+
+        ls -la "$(Build.SourcesDirectory)/$(appDirectory)"
 
       displayName: 'Verify Java and Maven'
 
@@ -93,20 +92,27 @@ stages:
     # MAVEN BUILD
     # --------------------------------------------------------
 
-    - powershell: |
+    - bash: |
 
-        Write-Host "========================================"
-        Write-Host "BUILDING APPLICATION"
-        Write-Host "========================================"
+        set -e
 
-        Set-Location "$(appDirectory)"
+        echo "========================================"
+        echo "BUILDING APPLICATION"
+        echo "========================================"
 
-        .\mvnw.cmd clean package -DskipTests
+        cd "$(Build.SourcesDirectory)/$(appDirectory)"
 
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "Maven build failed."
-            exit 1
-        }
+        echo "Current directory:"
+        pwd
+
+        echo ""
+        echo "Project files:"
+        ls -la
+
+        echo ""
+        echo "Running Maven build..."
+
+        mvn clean package -DskipTests
 
       displayName: 'Maven clean package'
 
@@ -115,22 +121,31 @@ stages:
     # VERIFY BUILD
     # --------------------------------------------------------
 
-    - powershell: |
+    - bash: |
 
-        Write-Host "========================================"
-        Write-Host "BUILD OUTPUT"
-        Write-Host "========================================"
+        set -e
 
-        Set-Location "$(appDirectory)"
+        cd "$(Build.SourcesDirectory)/$(appDirectory)"
 
-        Write-Host ""
-        Write-Host "Target directory:"
-        Get-ChildItem .\target
+        echo "========================================"
+        echo "BUILD OUTPUT"
+        echo "========================================"
 
-        Write-Host ""
-        Write-Host "Generated JAR/WAR files:"
+        if [ ! -d "target" ]; then
+          echo "Target directory not found."
+          exit 1
+        fi
 
-        Get-ChildItem .\target -Include *.jar,*.war -File
+        ls -lh target
+
+        echo ""
+        echo "Generated JAR/WAR files:"
+
+        find target \
+          -maxdepth 1 \
+          \( -name "*.jar" -o -name "*.war" \) \
+          -type f \
+          -print
 
       displayName: 'Verify generated artifact'
 
@@ -139,26 +154,183 @@ stages:
     # PREPARE ARTIFACT
     # --------------------------------------------------------
 
-    - powershell: |
+    - bash: |
 
-        Write-Host "========================================"
-        Write-Host "PREPARING ARTIFACT"
-        Write-Host "========================================"
+        set -e
 
-        $artifactDirectory = "$(Build.ArtifactStagingDirectory)\$(artifactName)"
+        echo "========================================"
+        echo "PREPARING ARTIFACT"
+        echo "========================================"
 
-        New-Item `
-          -ItemType Directory `
-          -Force `
-          -Path $artifactDirectory | Out-Null
+        ARTIFACT_DIR="$(Build.ArtifactStagingDirectory)/$(artifactName)"
 
-        Set-Location "$(appDirectory)"
+        mkdir -p "$ARTIFACT_DIR"
 
-        $files = Get-ChildItem .\target -Include *.jar,*.war -File
+        cd "$(Build.SourcesDirectory)/$(appDirectory)"
 
-        if ($files.Count -eq 0) {
-            Write-Error "No JAR or WAR file was generated."
-            exit 1
-        }
+        FILE_COUNT=$(find target \
+          -maxdepth 1 \
+          \( -name "*.jar" -o -name "*.war" \) \
+          -type f | wc -l)
 
-        foreach ($file in $files) {
+        if [ "$FILE_COUNT" -eq 0 ]; then
+
+          echo "No JAR or WAR file was generated."
+
+          exit 1
+
+        fi
+
+        find target \
+          -maxdepth 1 \
+          \( -name "*.jar" -o -name "*.war" \) \
+          -type f \
+          -exec cp {} "$ARTIFACT_DIR/" \;
+
+        echo ""
+        echo "Copied artifacts:"
+
+        ls -lh "$ARTIFACT_DIR"
+
+      displayName: 'Prepare artifact'
+
+
+    # --------------------------------------------------------
+    # PUBLISH PIPELINE ARTIFACT
+    # --------------------------------------------------------
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish pipeline artifact'
+
+      inputs:
+
+        targetPath: '$(Build.ArtifactStagingDirectory)/$(artifactName)'
+
+        artifact: '$(artifactName)'
+
+
+# ============================================================
+# STAGE 2 - UPLOAD TO AZURE STORAGE
+# ============================================================
+
+- stage: Upload
+  displayName: 'Upload Artifact to Azure Storage'
+
+  dependsOn: Build
+
+  condition: succeeded()
+
+  jobs:
+
+  - job: UploadArtifact
+    displayName: 'Upload to Azure Blob Storage'
+
+    steps:
+
+
+    # --------------------------------------------------------
+    # DOWNLOAD ARTIFACT
+    # --------------------------------------------------------
+
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download pipeline artifact'
+
+      inputs:
+
+        artifact: '$(artifactName)'
+
+        path: '$(Pipeline.Workspace)/$(artifactName)'
+
+
+    # --------------------------------------------------------
+    # VERIFY DOWNLOADED ARTIFACT
+    # --------------------------------------------------------
+
+    - bash: |
+
+        echo "========================================"
+        echo "DOWNLOADED ARTIFACT"
+        echo "========================================"
+
+        ls -lh "$(Pipeline.Workspace)/$(artifactName)"
+
+      displayName: 'Verify downloaded artifact'
+
+
+    # --------------------------------------------------------
+    # UPLOAD TO AZURE STORAGE
+    # --------------------------------------------------------
+
+    - task: AzureCLI@2
+      displayName: 'Upload artifact to Azure Blob Storage'
+
+      inputs:
+
+        azureSubscription: '$(azureServiceConnection)'
+
+        scriptType: 'bash'
+
+        scriptLocation: 'inlineScript'
+
+        inlineScript: |
+
+          set -e
+
+          echo "========================================"
+          echo "AZURE ACCOUNT"
+          echo "========================================"
+
+          az account show --output table
+
+          echo ""
+          echo "========================================"
+          echo "UPLOADING ARTIFACT"
+          echo "========================================"
+
+          echo "Storage Account: $(storageAccount)"
+          echo "Container: $(containerName)"
+
+          echo ""
+          echo "Files being uploaded:"
+
+          ls -lh "$(Pipeline.Workspace)/$(artifactName)"
+
+          az storage blob upload-batch \
+            --account-name "$(storageAccount)" \
+            --destination "$(containerName)" \
+            --source "$(Pipeline.Workspace)/$(artifactName)" \
+            --auth-mode login \
+            --overwrite true
+
+          echo ""
+          echo "========================================"
+          echo "UPLOAD SUCCESSFUL"
+          echo "========================================"
+
+
+    # --------------------------------------------------------
+    # VERIFY BLOB
+    # --------------------------------------------------------
+
+    - task: AzureCLI@2
+      displayName: 'Verify blob upload'
+
+      inputs:
+
+        azureSubscription: '$(azureServiceConnection)'
+
+        scriptType: 'bash'
+
+        scriptLocation: 'inlineScript'
+
+        inlineScript: |
+
+          echo "========================================"
+          echo "FILES IN AZURE CONTAINER"
+          echo "========================================"
+
+          az storage blob list \
+            --account-name "$(storageAccount)" \
+            --container-name "$(containerName)" \
+            --auth-mode login \
+            --output table
