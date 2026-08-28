@@ -17,6 +17,10 @@ variables:
 
 stages:
 
+# ============================================================
+# STAGE 1 - BUILD
+# ============================================================
+
 - stage: Build
   displayName: 'Build Java Login Application'
 
@@ -29,53 +33,116 @@ stages:
     - checkout: self
       displayName: 'Checkout source code'
 
+    # --------------------------------------------------------
+    # VERIFY JAVA, MAVEN AND PROJECT PATH
+    # --------------------------------------------------------
+
     - bash: |
+        echo "========================================"
         echo "JAVA VERSION"
+        echo "========================================"
         java -version
 
+        echo ""
+        echo "========================================"
         echo "MAVEN VERSION"
+        echo "========================================"
         mvn -version
 
+        echo ""
+        echo "========================================"
         echo "PROJECT DIRECTORY"
+        echo "========================================"
+
+        echo "$(Build.SourcesDirectory)/$(appDirectory)"
+
         ls -la "$(Build.SourcesDirectory)/$(appDirectory)"
-      displayName: 'Verify Java and Maven'
+
+        echo ""
+        echo "Checking pom.xml"
+
+        ls -l "$(Build.SourcesDirectory)/$(appDirectory)/pom.xml"
+
+      displayName: 'Verify Java Maven and project'
+
+
+    # --------------------------------------------------------
+    # MAVEN BUILD
+    # --------------------------------------------------------
 
     - bash: |
-        set -e
+        echo "========================================"
+        echo "BUILDING APPLICATION"
+        echo "========================================"
 
         cd "$(Build.SourcesDirectory)/$(appDirectory)"
 
         echo "Current directory:"
         pwd
 
-        echo "Running Maven build..."
-        mvn clean package -DskipTests
+        echo ""
+        echo "Project files:"
+        ls -la
+
+        echo ""
+        echo "Starting Maven build..."
+
+        mvn clean package -DskipTests -e
+
+        MAVEN_EXIT=$?
+
+        echo ""
+        echo "========================================"
+        echo "MAVEN EXIT CODE: $MAVEN_EXIT"
+        echo "========================================"
+
+        exit $MAVEN_EXIT
+
       displayName: 'Maven clean package'
 
+
+    # --------------------------------------------------------
+    # VERIFY BUILD OUTPUT
+    # --------------------------------------------------------
+
     - bash: |
-        set -e
+        echo "========================================"
+        echo "VERIFY BUILD OUTPUT"
+        echo "========================================"
 
         cd "$(Build.SourcesDirectory)/$(appDirectory)"
 
-        echo "BUILD OUTPUT"
-
         if [ ! -d "target" ]; then
-          echo "Target directory not found"
+          echo "ERROR: target directory was not created."
           exit 1
         fi
 
-        ls -lh target
+        echo ""
+        echo "Target directory contents:"
 
+        ls -lah target
+
+        echo ""
         echo "Generated JAR/WAR files:"
 
         find target -maxdepth 1 \
           \( -name "*.jar" -o -name "*.war" \) \
           -type f \
           -print
+
       displayName: 'Verify generated artifact'
+
+
+    # --------------------------------------------------------
+    # PREPARE ARTIFACT
+    # --------------------------------------------------------
 
     - bash: |
         set -e
+
+        echo "========================================"
+        echo "PREPARING ARTIFACT"
+        echo "========================================"
 
         ARTIFACT_DIR="$(Build.ArtifactStagingDirectory)/$(artifactName)"
 
@@ -85,10 +152,12 @@ stages:
 
         FILE_COUNT=$(find target -maxdepth 1 \
           \( -name "*.jar" -o -name "*.war" \) \
-          -type f | wc -l)
+          -type f | wc -l | tr -d ' ')
+
+        echo "Artifact count: $FILE_COUNT"
 
         if [ "$FILE_COUNT" -eq 0 ]; then
-          echo "No JAR or WAR file generated"
+          echo "ERROR: No JAR or WAR file generated."
           exit 1
         fi
 
@@ -97,9 +166,17 @@ stages:
           -type f \
           -exec cp {} "$ARTIFACT_DIR/" \;
 
-        echo "Artifacts copied:"
-        ls -lh "$ARTIFACT_DIR"
+        echo ""
+        echo "Copied artifacts:"
+
+        ls -lah "$ARTIFACT_DIR"
+
       displayName: 'Prepare artifact'
+
+
+    # --------------------------------------------------------
+    # PUBLISH PIPELINE ARTIFACT
+    # --------------------------------------------------------
 
     - task: PublishPipelineArtifact@1
       displayName: 'Publish pipeline artifact'
@@ -108,8 +185,13 @@ stages:
         artifact: '$(artifactName)'
 
 
+# ============================================================
+# STAGE 2 - UPLOAD TO AZURE STORAGE
+# ============================================================
+
 - stage: Upload
   displayName: 'Upload Artifact to Azure Storage'
+
   dependsOn: Build
   condition: succeeded()
 
@@ -119,16 +201,34 @@ stages:
 
     steps:
 
+    # --------------------------------------------------------
+    # DOWNLOAD ARTIFACT
+    # --------------------------------------------------------
+
     - task: DownloadPipelineArtifact@2
       displayName: 'Download pipeline artifact'
       inputs:
         artifact: '$(artifactName)'
         path: '$(Pipeline.Workspace)/$(artifactName)'
 
+
+    # --------------------------------------------------------
+    # VERIFY DOWNLOADED FILE
+    # --------------------------------------------------------
+
     - bash: |
+        echo "========================================"
         echo "DOWNLOADED ARTIFACT"
-        ls -lh "$(Pipeline.Workspace)/$(artifactName)"
+        echo "========================================"
+
+        ls -lah "$(Pipeline.Workspace)/$(artifactName)"
+
       displayName: 'Verify downloaded artifact'
+
+
+    # --------------------------------------------------------
+    # UPLOAD TO AZURE STORAGE
+    # --------------------------------------------------------
 
     - task: AzureCLI@2
       displayName: 'Upload artifact to Azure Blob Storage'
@@ -139,10 +239,23 @@ stages:
         inlineScript: |
           set -e
 
-          echo "Storage Account: $(storageAccount)"
+          echo "========================================"
+          echo "AZURE LOGIN"
+          echo "========================================"
+
+          az account show --output table
+
+          echo ""
+          echo "Storage account: $(storageAccount)"
           echo "Container: $(containerName)"
 
-          ls -lh "$(Pipeline.Workspace)/$(artifactName)"
+          echo ""
+          echo "Files to upload:"
+
+          ls -lah "$(Pipeline.Workspace)/$(artifactName)"
+
+          echo ""
+          echo "Uploading..."
 
           az storage blob upload-batch \
             --account-name "$(storageAccount)" \
@@ -151,7 +264,13 @@ stages:
             --auth-mode login \
             --overwrite true
 
-          echo "Upload successful"
+          echo ""
+          echo "UPLOAD COMPLETED"
+
+
+    # --------------------------------------------------------
+    # VERIFY AZURE BLOB
+    # --------------------------------------------------------
 
     - task: AzureCLI@2
       displayName: 'Verify blob upload'
@@ -160,6 +279,10 @@ stages:
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
+          echo "========================================"
+          echo "FILES IN AZURE CONTAINER"
+          echo "========================================"
+
           az storage blob list \
             --account-name "$(storageAccount)" \
             --container-name "$(containerName)" \
